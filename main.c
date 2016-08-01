@@ -30,6 +30,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/ioctl.h>
 
 #include "h264parser.h"
 
@@ -208,7 +209,7 @@ int setup_capture(void)
 
 	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 	if (ioctl(m2m_fd, VIDIOC_G_FMT, &fmt) != 0) {
-		err("Failed to read format (after parsing header)");
+		perror("Failed to read format (after parsing header)");
 		return -1;
 	}
 	printf("Got format: %dx%d (plane sizes: %d, %d)\n",
