@@ -32,12 +32,7 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 
-#include "h264parser.h"
-
-int in_fd;
-off_t in_size;
-off_t in_offs = 0;
-unsigned char *in_map;
+#include "vp9parser.h"
 
 int m2m_fd;
 unsigned char *out_buf_map[2];
@@ -54,21 +49,8 @@ int cap_height;
 
 int input_open(const char *name)
 {
-	struct stat st;
+	vp9_input_open(name);
 
-	in_fd = open(name, O_RDONLY);
-	if (in_fd < 0) {
-		perror("input open");
-		return -1;
-	}
-
-	fstat(in_fd, &st);
-	in_map = mmap(0, st.st_size, PROT_READ, MAP_SHARED, in_fd, 0);
-	if (in_map == MAP_FAILED) {
-		perror("input mmap");
-	}
-
-	in_size = st.st_size;
 	return 0;
 }
 
@@ -98,7 +80,7 @@ int output_set_format(void)
 	struct v4l2_format fmt = { 0, };
 
 	fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-	fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_H264;
+	fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_VP9;
 	fmt.fmt.pix_mp.plane_fmt[0].sizeimage = 1024 * 1024;
 	fmt.fmt.pix_mp.num_planes = 1;
 
@@ -313,7 +295,6 @@ int parse_one_nal(void)
 {
 	int n = 0;
 	int ret;
-	int used;
 	int fs;
 
 	while (n < out_buf_cnt && out_buf_queued[n])
@@ -328,18 +309,16 @@ int parse_one_nal(void)
 		out_buf_queued[n] = 0;
 	}
 
-	ret = parse_h264_stream(in_map + in_offs, in_size - in_offs,
-							out_buf_map[n], out_buf_size, &used, &fs, 0);
-	used = fs; /* don't consume the next RBSP stop sequence */
-	if (ret == 0 && in_offs == in_size) {
+	fs = vp9_parse_stream(out_buf_map[n], out_buf_size);
+	if (fs == 0) {
 		printf("All frames extracted\n");
 		return 1;
 	}
 
-	printf("Extracted frame with size %d, queue in outbuf %d\n", fs, n);
 	queue_buf(n, fs, 0, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE, 1);
 	out_buf_queued[n] = 1;
-	in_offs += used;
+
+	printf("Extracted frame with size %d, queue in outbuf %d\n", fs, n);
 
 	return 0;
 }
@@ -480,7 +459,7 @@ int main(int argc, char *argv[])
 
 	if (input_open(argv[1]) < 0)
 		return -1;
-	
+
 	if (m2m_open(argv[2]) < 0)
 		return -1;
 
@@ -525,7 +504,6 @@ int main(int argc, char *argv[])
 	parse_one_nal();
 	stream(V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE, VIDIOC_STREAMON);
 
-	parser_init();
 	if (pthread_create(&parser_thread, NULL, parser_thread_func, NULL)) {
 		fprintf(stderr, "Failed to launch parser thread\n");
 		return -1;
