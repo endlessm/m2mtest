@@ -117,7 +117,7 @@ void map_output(void)
 	int i;
 	for (i = 0; i < out_buf_cnt; i++) {
 		struct v4l2_buffer buf = { 0, };
-		struct v4l2_plane planes[1];
+		struct v4l2_plane planes[1] = { 0, };
 
 		buf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
 		buf.memory = V4L2_MEMORY_MMAP;
@@ -160,7 +160,7 @@ void map_capture(void)
 	int i;
 	for (i = 0; i < cap_buf_cnt; i++) {
 		struct v4l2_buffer buf = { 0, };
-		struct v4l2_plane planes[1];
+		struct v4l2_plane planes[1] = { 0, };
 
 		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 		buf.memory = V4L2_MEMORY_MMAP;
@@ -220,7 +220,7 @@ int setup_capture(void)
 int queue_buf(int index, int l1, int l2, int type, int nplanes)
 {
 	struct v4l2_buffer qbuf = { 0, };
-	struct v4l2_plane planes[2];
+	struct v4l2_plane planes[2] = { 0, };
 	int ret;
 
 	qbuf.type = type;
