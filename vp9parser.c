@@ -40,11 +40,6 @@ void vp9_input_open(const char *in_file)
 	/* dump input information to stderr */
 	av_dump_format(fmt_ctx, 0, in_file, 0);
 
-	/* initialize packet, set data to NULL, let the demuxer fill it */
-	av_init_packet(&pkt);
-	pkt.data = NULL;
-	pkt.size = 0;
-
 	return;
 }
 
@@ -53,7 +48,7 @@ static void vp9_update_frame_header(AVPacket *pkt)
 {
 	int ret;
 	int framesize;
-	uint8_t *fdata = pkt->data;
+	uint8_t *fdata;
 
 	framesize = pkt->size;
 
@@ -63,6 +58,7 @@ static void vp9_update_frame_header(AVPacket *pkt)
 		exit(1);
 	}
 
+	fdata = pkt->data;
 	memmove(fdata + 16, fdata, framesize);
 	framesize += 4;
 
@@ -89,6 +85,10 @@ static void vp9_update_frame_header(AVPacket *pkt)
 
 int vp9_parse_stream(char *out, int out_size)
 {
+	av_init_packet(&pkt);
+	pkt.data = NULL;
+	pkt.size = 0;
+
 	if (av_read_frame(fmt_ctx, &pkt) < 0)
 		return 0;
 
