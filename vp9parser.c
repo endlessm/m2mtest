@@ -6,7 +6,7 @@
 #include <libavutil/samplefmt.h>
 #include <libavformat/avformat.h>
 
-#define UPDATE_HEADER
+//#define UPDATE_HEADER
 
 static AVFormatContext *fmt_ctx = NULL;
 static int video_stream_idx = -1;
