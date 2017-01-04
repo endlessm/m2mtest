@@ -25,6 +25,7 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <limits.h>
 #include <linux/videodev2.h>
 #include <sys/mman.h>
@@ -43,6 +44,7 @@ int out_buf_size;
 int cap_buf_cnt;
 int cap_buf_size[2];
 unsigned char *cap_buf_map[10];
+unsigned char *cap_buf_map2[10];
 uint32_t cap_bytesperline;
 int cap_width;
 int cap_height;
@@ -145,7 +147,7 @@ int capture_set_format(void)
 	struct v4l2_format fmt = { 0, };
 
 	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-	fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_BGR32;
+	fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_NV12M;
 
 	if (ioctl(m2m_fd, VIDIOC_S_FMT, &fmt) != 0) {
 		perror("output S_FMT");
@@ -160,13 +162,16 @@ void map_capture(void)
 	int i;
 	for (i = 0; i < cap_buf_cnt; i++) {
 		struct v4l2_buffer buf = { 0, };
-		struct v4l2_plane planes[1] = { 0, };
+		struct v4l2_plane planes[2];
+
+		memset(&planes[0], 0, sizeof(struct v4l2_plane));
+		memset(&planes[1], 0, sizeof(struct v4l2_plane));
 
 		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 		buf.memory = V4L2_MEMORY_MMAP;
 		buf.index = i;
 		buf.m.planes = planes;
-		buf.length = 1;
+		buf.length = 2;
 
 		if (ioctl(m2m_fd, VIDIOC_QUERYBUF, &buf) < 0) {
 			fprintf(stderr, "querybuf output %d: %m\n", i);
@@ -180,6 +185,15 @@ void map_capture(void)
 			fprintf(stderr, "map capture buffer %d: %m\n", i);
 			continue;
 		}
+
+		cap_buf_map2[i] = mmap(NULL, buf.m.planes[1].length,
+							  PROT_READ | PROT_WRITE, MAP_SHARED, m2m_fd,
+							  buf.m.planes[1].m.mem_offset);
+		if (cap_buf_map2[i] == MAP_FAILED) {
+			fprintf(stderr, "map capture buffer 2 %d: %m\n", i);
+			continue;
+		}
+
 	}
 }
 
@@ -245,8 +259,8 @@ void queue_capture(void)
 {
 	int i;
 	for (i = 0; i < cap_buf_cnt; i++) {
-		queue_buf(i, cap_buf_size[0], 0,
-				  V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, 1);
+		queue_buf(i, cap_buf_size[0], cap_buf_size[1],
+				  V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, 2);
 	}
 }
 
@@ -278,7 +292,7 @@ int dequeue_capture(int *n, uint32_t *bytesused)
 	qbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 	qbuf.memory = V4L2_MEMORY_MMAP;
 	qbuf.m.planes = planes;
-	qbuf.length = 1;
+	qbuf.length = 2;
 
 	if (ioctl(m2m_fd, VIDIOC_DQBUF, &qbuf)) {
 		fprintf(stderr, "Capture dequeue error: %m\n");
@@ -411,17 +425,28 @@ void save_image(int n)
 	unsigned char *data = cap_buf_map[n];
 	uint32_t row, col;
 
-	sprintf(filename, "img%03d.ppm", ++ctr);
+	sprintf(filename, "img%03d.1", ++ctr);
 
 	fd = fopen(filename, "w");
 	if (!fd)
 		return;
 
-	/* write ppm format, no alpha channel */
-	fprintf(fd, "P6 %d %d 255\n", cap_width, cap_height);
 	for (row = 0; row < cap_height; row++) {
-		for (col = 0; col < cap_width; col++)
-			fwrite(data + (col * 4), 1, 3, fd);
+		fwrite(data, cap_width, 1, fd);
+		data += cap_bytesperline;
+	}
+
+	fclose(fd);
+	printf("Written to output file %s.\n", filename);
+
+	sprintf(filename, "img%03d.2", ctr);
+	fd = fopen(filename, "w");
+	if (!fd)
+		return;
+
+	data = cap_buf_map2[n];
+	for (row = 0; row < (cap_height / 2); row++) {
+		fwrite(data, cap_width, 1, fd);
 		data += cap_bytesperline;
 	}
 
@@ -443,8 +468,8 @@ void capture(void)
 		}
 
 		save_image(n);
-		queue_buf(n, cap_buf_size[0], 0,
-				  V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, 1);
+		queue_buf(n, cap_buf_size[0], cap_buf_size[1],
+				  V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, 2);
 	}
 }
 
