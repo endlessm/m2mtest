@@ -46,38 +46,103 @@ void vp9_input_open(const char *in_file)
 #ifdef UPDATE_HEADER
 static void vp9_update_frame_header(AVPacket *pkt)
 {
+
+	unsigned char *buf = pkt->data;
+	unsigned char *old_header = NULL;
+	unsigned char marker;
+	int dsize = pkt->size;
+	int frame_number;
+	int cur_frame, cur_mag, mag, index_sz, offset[9], size[8], tframesize[9];
+	int mag_ptr;
 	int ret;
-	int framesize;
-	uint8_t *fdata;
+	int total_datasize = 0;
 
-	framesize = pkt->size;
+	marker = buf[dsize - 1];
+	if ((marker & 0xe0) == 0xc0) {
+		frame_number = (marker & 0x7) + 1;
+		mag = ((marker >> 3) & 0x3) + 1;
+		index_sz = 2 + mag * frame_number;
+		printf(" frame_number : %d, mag : %d; index_sz : %d\n", frame_number, mag, index_sz);
+		offset[0] = 0;
+		mag_ptr = dsize - mag * frame_number - 2;
+		if (buf[mag_ptr] != marker) {
+			fprintf(stderr, " Wrong marker2 : 0x%X --> 0x%X\n", marker, buf[mag_ptr]);
+			exit(1);
+		}
+		mag_ptr++;
+		for (cur_frame = 0; cur_frame < frame_number; cur_frame++) {
+			size[cur_frame] = 0;
+			for (cur_mag = 0; cur_mag < mag; cur_mag++) {
+				size[cur_frame] = size[cur_frame]  | (buf[mag_ptr] << (cur_mag*8) );
+				mag_ptr++;
+			}
+			offset[cur_frame+1] = offset[cur_frame] + size[cur_frame];
+			if (cur_frame == 0)
+				tframesize[cur_frame] = size[cur_frame];
+			else
+				tframesize[cur_frame] = tframesize[cur_frame - 1] + size[cur_frame];
+			total_datasize += size[cur_frame];
+		}
+	} else {
+		frame_number = 1;
+		offset[0] = 0;
+		size[0] = dsize;
+		total_datasize += dsize;
+		tframesize[0] = dsize;
+	}
 
-	ret = av_grow_packet(pkt, 16);
-	if (ret < 0) {
-		fprintf(stderr, "Error in updating the frame header\n");
+	if (total_datasize > dsize) {
+		fprintf(stderr, "DATA overflow : 0x%X --> 0x%X\n", total_datasize, dsize);
 		exit(1);
 	}
 
-	fdata = pkt->data;
-	memmove(fdata + 16, fdata, framesize);
-	framesize += 4;
+	if (frame_number >= 1) {
+		int need_more = total_datasize + frame_number * 16 - dsize;
+		ret = av_grow_packet(pkt, need_more);
+		if (ret < 0) {
+			fprintf(stderr, "ERROR!!! grow_packet for apk failed\n");
+			exit(1);
+		}
+	}
 
-	fdata[0] = (framesize >> 24) & 0xff;
-	fdata[1] = (framesize >> 16) & 0xff;
-	fdata[2] = (framesize >> 8) & 0xff;
-	fdata[3] = (framesize >> 0) & 0xff;
-	fdata[4] = ((framesize >> 24) & 0xff) ^0xff;
-	fdata[5] = ((framesize >> 16) & 0xff) ^0xff;
-	fdata[6] = ((framesize >> 8) & 0xff) ^0xff;
-	fdata[7] = ((framesize >> 0) & 0xff) ^0xff;
-	fdata[8] = 0;
-	fdata[9] = 0;
-	fdata[10] = 0;
-	fdata[11] = 1;
-	fdata[12] = 'A';
-	fdata[13] = 'M';
-	fdata[14] = 'L';
-	fdata[15] = 'V';
+	for (cur_frame = frame_number - 1; cur_frame >= 0; cur_frame--) {
+		int framesize = size[cur_frame];
+		int oldframeoff = tframesize[cur_frame] - framesize;
+		int outheaderoff = oldframeoff + cur_frame * 16;
+		uint8_t *fdata = pkt->data + outheaderoff;
+		uint8_t *old_framedata = pkt->data + oldframeoff;
+
+		memmove(fdata + 16, old_framedata, framesize);
+		framesize += 4;
+
+		fdata[0] = (framesize >> 24) & 0xff;
+		fdata[1] = (framesize >> 16) & 0xff;
+		fdata[2] = (framesize >> 8) & 0xff;
+		fdata[3] = (framesize >> 0) & 0xff;
+		fdata[4] = ((framesize >> 24) & 0xff) ^0xff;
+		fdata[5] = ((framesize >> 16) & 0xff) ^0xff;
+		fdata[6] = ((framesize >> 8) & 0xff) ^0xff;
+		fdata[7] = ((framesize >> 0) & 0xff) ^0xff;
+		fdata[8] = 0;
+		fdata[9] = 0;
+		fdata[10] = 0;
+		fdata[11] = 1;
+		fdata[12] = 'A';
+		fdata[13] = 'M';
+		fdata[14] = 'L';
+		fdata[15] = 'V';
+
+		framesize -= 4;
+		if (!old_header) {
+			// nothing
+		} else if (old_header > fdata + 16 + framesize) {
+			fprintf(stderr, "data has gaps,set to 0\n");
+			memset(fdata + 16 + framesize, 0, (old_header - fdata + 16 + framesize));
+		} else if (old_header < fdata + 16 + framesize) {
+			fprintf(stderr, "ERROR. data overwrited. overwrite %d\n", fdata + 16 + framesize - old_header); 
+		}
+		old_header = fdata;
+	}
 
 	return;
 }
