@@ -25,6 +25,7 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <limits.h>
 #include <linux/videodev2.h>
@@ -36,18 +37,20 @@
 #include "vp9parser.h"
 
 int m2m_fd;
-unsigned char *out_buf_map[2];
-int out_buf_queued[2];
+unsigned char *out_buf_map[4];
+int out_buf_queued[4];
 int out_buf_cnt;
 int out_buf_size;
 
 int cap_buf_cnt;
 int cap_buf_size[2];
-unsigned char *cap_buf_map[10];
-unsigned char *cap_buf_map2[10];
+unsigned char *cap_buf_map[13];
+unsigned char *cap_buf_map2[13];
 uint32_t cap_bytesperline;
 int cap_width;
 int cap_height;
+
+char *frame_path;
 
 int input_open(const char *name)
 {
@@ -100,7 +103,7 @@ int output_request_buffers(void)
 {
 	struct v4l2_requestbuffers reqbuf = { 0, };
 
-	reqbuf.count = 2;
+	reqbuf.count = 4;
 	reqbuf.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
 	reqbuf.memory = V4L2_MEMORY_MMAP;
 
@@ -219,7 +222,7 @@ int setup_capture(void)
 	cap_width = fmt.fmt.pix_mp.width;
 	cap_height = fmt.fmt.pix_mp.height;
 
-	reqbuf.count = 10;
+	reqbuf.count = 13;
 	reqbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 	reqbuf.memory = V4L2_MEMORY_MMAP;
 	if (ioctl(m2m_fd, VIDIOC_REQBUFS, &reqbuf) != 0) {
@@ -305,11 +308,21 @@ int dequeue_capture(int *n, uint32_t *bytesused)
 	return 0;
 }
 
-int parse_one_nal(void)
+int parse_one_nal(int first_frame, int last_frame)
 {
 	int n = 0;
 	int ret;
 	int fs;
+	static int current_frame = 0;
+	char f_path[PATH_MAX];
+	int fd;
+	struct stat st;
+
+	if (!current_frame || first_frame > current_frame)
+		current_frame = first_frame;
+
+	if (last_frame && last_frame == current_frame)
+		return 1;
 
 	while (n < out_buf_cnt && out_buf_queued[n])
 		n++;
@@ -323,11 +336,23 @@ int parse_one_nal(void)
 		out_buf_queued[n] = 0;
 	}
 
-	fs = vp9_parse_stream(out_buf_map[n], out_buf_size);
-	if (fs == 0) {
+	sprintf(f_path, "%s/frame%04d", frame_path, current_frame++);
+	printf("\t=> Reading frame %s\n", f_path);
+
+	if ((fd = open(f_path, O_RDONLY)) == -1) {
 		printf("All frames extracted\n");
 		return 1;
 	}
+
+	fstat(fd, &st);
+	fs = st.st_size;
+
+	if (read(fd, out_buf_map[n], st.st_size) < 0) {
+		perror("read error");
+		exit(1);
+	}
+
+	close(fd);
 
 	queue_buf(n, fs, 0, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE, 1);
 	out_buf_queued[n] = 1;
@@ -358,7 +383,7 @@ void *parser_thread_func(void *args)
 	int i = 0;
 
 	while (1) {
-		if (parse_one_nal())
+		if (parse_one_nal(2,641))
 			break;
 	}
 	stop_decoder();
@@ -478,15 +503,14 @@ int main(int argc, char *argv[])
 	pthread_t parser_thread;
 
 	if (argc < 3) {
-		fprintf(stderr, "Usage: %s <input file> <m2m device>\n", argv[0]);
+		fprintf(stderr, "Usage: %s <m2m device> <frame_dir>\n", argv[0]);
 		return 1;
 	}
 
-	if (input_open(argv[1]) < 0)
+	if (m2m_open(argv[1]) < 0)
 		return -1;
 
-	if (m2m_open(argv[2]) < 0)
-		return -1;
+	frame_path = argv[2];
 
 	if (subscribe_source_change() < 0)
 		return -1;
@@ -526,7 +550,7 @@ int main(int argc, char *argv[])
 	//if (parse_and_queue_header() < 0)
 	//	return -1;
 
-	parse_one_nal();
+	parse_one_nal(1,0);
 	stream(V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE, VIDIOC_STREAMON);
 
 	if (pthread_create(&parser_thread, NULL, parser_thread_func, NULL)) {
